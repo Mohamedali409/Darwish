@@ -2,25 +2,26 @@
 
 A modular backend service built with **Node.js, Express, TypeScript, MongoDB, Redis, and Docker**.
 
-The project implements a **Modular Monolith architecture** with a focus on clean separation of responsibilities, caching, validation, error handling, testing, and containerized development.
+The project follows a **Modular Monolith architecture** with a focus on clean separation of responsibilities, request validation, centralized error handling, caching, API security, automated testing, and containerized development.
 
 ---
 
 ## Tech Stack
 
-| Technology     | Purpose                     |
-| -------------- | --------------------------- |
-| Node.js        | JavaScript runtime          |
-| Express.js     | REST API framework          |
-| TypeScript     | Type-safe development       |
-| MongoDB        | Primary database            |
-| Mongoose       | MongoDB ODM                 |
-| Redis          | Caching                     |
-| Zod            | Request validation          |
-| Vitest         | Unit testing                |
-| Supertest      | API integration testing     |
-| Docker         | Containerization            |
-| Docker Compose | Local service orchestration |
+| Technology         | Purpose                      |
+| ------------------ | ---------------------------- |
+| Node.js            | JavaScript runtime           |
+| Express.js         | REST API framework           |
+| TypeScript         | Type-safe development        |
+| MongoDB            | Primary database             |
+| Mongoose           | MongoDB ODM                  |
+| Redis              | Caching                      |
+| Zod                | Request validation           |
+| express-rate-limit | API rate limiting            |
+| Vitest             | Unit and integration testing |
+| Supertest          | HTTP API testing             |
+| Docker             | Containerization             |
+| Docker Compose     | Local service orchestration  |
 
 ---
 
@@ -29,27 +30,27 @@ The project implements a **Modular Monolith architecture** with a focus on clean
 Audex follows a **Modular Monolith** architecture.
 
 ```text
-                    Client
-                      │
-                      ▼
-                Express API
-                      │
-                      ▼
-          ┌──────────────────────┐
-          │  Reference Data      │
-          │      Module          │
-          ├──────────────────────┤
-          │ Controller           │
-          │ Service              │
-          │ Repository           │
-          │ Model                │
-          │ Validation           │
-          └──────────┬───────────┘
-                     │
-             ┌───────┴────────┐
-             ▼                ▼
-         MongoDB            Redis
-         Database           Cache
+                         Client
+                           │
+                           ▼
+                     Express API
+                           │
+                           ▼
+              ┌───────────────────────┐
+              │   Reference Data      │
+              │       Module          │
+              ├───────────────────────┤
+              │ Controller            │
+              │ Service               │
+              │ Repository            │
+              │ Model                 │
+              │ Validation            │
+              └───────────┬───────────┘
+                          │
+                 ┌────────┴────────┐
+                 ▼                 ▼
+              MongoDB            Redis
+              Database            Cache
 ```
 
 ### Module Responsibilities
@@ -57,10 +58,10 @@ Audex follows a **Modular Monolith** architecture.
 - **Controller** — Handles HTTP requests and responses.
 - **Service** — Contains business logic.
 - **Repository** — Handles database operations.
-- **Model** — Defines the MongoDB schema.
+- **Model** — Defines MongoDB schemas.
 - **Validation** — Validates incoming request data.
 - **Infrastructure** — Provides external infrastructure such as MongoDB and Redis.
-- **Middleware** — Handles validation and centralized errors.
+- **Middleware** — Handles validation, rate limiting, and centralized error handling.
 
 ---
 
@@ -69,7 +70,7 @@ Audex follows a **Modular Monolith** architecture.
 ### Reference Data
 
 - Get countries
-- Update country
+- Update countries
 - Country validation
 - MongoDB persistence
 - Duplicate country-code protection
@@ -81,10 +82,18 @@ Audex follows a **Modular Monolith** architecture.
 - Cache hit / miss handling
 - Cache invalidation after updates
 
+### API Security
+
+- Configurable rate limiting
+- Protected reference-data endpoint
+- HTTP `429 Too Many Requests` response
+- Standard rate-limit headers
+- Clear client-facing throttling message
+
 ### Error Handling
 
 - Centralized error middleware
-- Validation errors
+- Request validation errors
 - Invalid MongoDB ObjectId handling
 - Resource not found handling
 - Duplicate key handling
@@ -92,10 +101,12 @@ Audex follows a **Modular Monolith** architecture.
 ### Testing
 
 - Unit tests for business logic
-- Redis cache behavior testing
+- Cache hit / miss testing
 - Cache invalidation testing
-- Error scenario testing
-- API integration testing
+- Validation and error scenario testing
+- API health testing
+- Rate limiting testing
+- Allowed vs throttled request testing
 
 ### Docker
 
@@ -175,6 +186,63 @@ Both fields can also be updated together.
 
 ---
 
+## API Security — Rate Limiting
+
+The countries endpoint is protected with configurable rate limiting.
+
+### Configuration
+
+```env
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQUESTS=10
+```
+
+Default configuration:
+
+- **10 requests**
+- **60-second window**
+- Limit is applied per client
+
+### Protected Endpoint
+
+```http
+GET /api/reference-data/countries
+```
+
+### Rate Limit Flow
+
+```text
+Client
+   │
+   ▼
+Rate Limiter
+   │
+   ├── Within limit ──────► Reference Data API
+   │
+   └── Limit exceeded ────► HTTP 429
+```
+
+### Rate Limit Exceeded
+
+When the client exceeds the configured limit, the API returns:
+
+```http
+HTTP 429 Too Many Requests
+```
+
+Response:
+
+```json
+{
+  "success": false,
+  "message": "Too many requests. Please try again later."
+}
+```
+
+The API also returns standard rate-limit headers that allow clients to understand the configured limit and current request state.
+
+---
+
 ## Caching Strategy
 
 The countries endpoint uses a **Cache-Aside** pattern.
@@ -207,17 +275,17 @@ Response  MongoDB
 PUT /countries/:id
         │
         ▼
-    MongoDB
-      UPDATE
+     MongoDB
+       UPDATE
         │
         ▼
    Redis DELETE
         │
         ▼
-  Cache Invalidated
+ Cache Invalidated
 ```
 
-The next request will fetch the updated data from MongoDB and populate Redis again.
+The next request fetches the updated data from MongoDB and stores it in Redis again.
 
 **Cache TTL:** `1 hour`
 
@@ -241,6 +309,7 @@ Audex/
 │   ├── middlewares/
 │   │   ├── app-error.ts
 │   │   ├── error.middleware.ts
+│   │   ├── rate-limit.middleware.ts
 │   │   └── validate.middleware.ts
 │   │
 │   ├── modules/
@@ -262,6 +331,7 @@ Audex/
 ├── tests/
 │   ├── setup.ts
 │   ├── app.test.ts
+│   ├── rate-limit.test.ts
 │   └── reference-data.service.test.ts
 │
 ├── .env.example
@@ -286,6 +356,9 @@ PORT=3000
 MONGODB_URI=mongodb://localhost:27017/audex
 
 REDIS_URL=redis://localhost:6379
+
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQUESTS=10
 ```
 
 > `.env` is excluded from Git. Use `.env.example` as a reference.
@@ -368,13 +441,13 @@ docker compose down
 
 ## Testing
 
-Run the test suite:
+Run the complete test suite:
 
 ```bash
 npm test
 ```
 
-Current tests cover:
+The current test suite covers:
 
 - Cache miss behavior
 - Cache hit behavior
@@ -382,19 +455,22 @@ Current tests cover:
 - Invalid country ID
 - Country not found
 - API health endpoint
+- Rate limiting
+- Allowed requests
+- Throttled requests with HTTP `429`
 
-Expected result:
+Current result:
 
 ```text
-Test Files  2 passed
-Tests       6 passed
+Test Files  3 passed (3)
+Tests       7 passed (7)
 ```
 
 ---
 
 ## Build
 
-Compile TypeScript:
+Compile the TypeScript project:
 
 ```bash
 npm run build
@@ -459,6 +535,21 @@ npm start
 }
 ```
 
+### Rate Limit Exceeded
+
+```json
+{
+  "success": false,
+  "message": "Too many requests. Please try again later."
+}
+```
+
+HTTP status:
+
+```text
+429 Too Many Requests
+```
+
 ---
 
 ## Development Principles
@@ -467,11 +558,12 @@ The project follows several backend development principles:
 
 - Modular Monolith architecture
 - Separation of concerns
-- Service/Repository pattern
+- Service / Repository pattern
 - Centralized error handling
 - Request validation
 - Cache-aside caching
 - Cache invalidation
+- Configurable API rate limiting
 - Environment-based configuration
 - Automated testing
 - Dockerized development and deployment
@@ -480,16 +572,17 @@ The project follows several backend development principles:
 
 ## Status
 
-**Project Status:** Completed
+**Project Status: Completed**
 
-The current implementation includes:
+Current implementation includes:
 
 - REST API
 - MongoDB integration
 - Redis caching
 - Cache invalidation
-- Validation
-- Error handling
+- Request validation
+- Centralized error handling
+- API rate limiting
 - Unit tests
 - Integration tests
 - Docker support
