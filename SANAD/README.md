@@ -2,7 +2,7 @@
 
 A modular backend service built with **Node.js, Express, TypeScript, MongoDB, and Docker**.
 
-The project follows a **Modular Monolith architecture** with a focus on clean separation of responsibilities, database optimization, automated testing, and maintainable backend development.
+The project follows a **Modular Monolith architecture** with a focus on clean separation of responsibilities, database optimization, transactional workflows, automated testing, and maintainable backend development.
 
 ---
 
@@ -16,6 +16,7 @@ The project follows a **Modular Monolith architecture** with a focus on clean se
 | MongoDB        | Primary database             |
 | Mongoose       | MongoDB ODM                  |
 | Vitest         | Testing framework            |
+| Supertest      | HTTP API testing             |
 | Docker         | Containerization             |
 | Docker Compose | Local database orchestration |
 
@@ -39,7 +40,7 @@ SANAD follows a **Modular Monolith** architecture.
               │ Controller            │
               │ Service               │
               │ Repository            │
-              │ Model                 │
+              │ Models                │
               └───────────┬───────────┘
                           │
                           ▼
@@ -49,9 +50,9 @@ SANAD follows a **Modular Monolith** architecture.
 ### Module Responsibilities
 
 - **Controller** — Handles HTTP requests and responses.
-- **Service** — Contains business logic.
+- **Service** — Contains business logic and transactional workflows.
 - **Repository** — Handles database queries.
-- **Model** — Defines MongoDB schemas.
+- **Model** — Defines MongoDB schemas and relationships.
 
 ---
 
@@ -63,6 +64,8 @@ SANAD follows a **Modular Monolith** architecture.
 - Filter appointments by date range
 - Filter appointments by status
 - Sort appointments by appointment date
+- Book appointments through a transactional workflow
+- Create appointment audit records
 
 ### Database Optimization
 
@@ -71,14 +74,26 @@ SANAD follows a **Modular Monolith** architecture.
 - Verification of index usage through execution statistics
 - Reduced documents examined during appointment queries
 
+### Transactional Workflow
+
+- MongoDB transaction support using Mongoose
+- Atomic appointment and audit creation
+- Automatic rollback on persistence failure
+- Validation before transactional database operations
+- Commit and rollback test coverage
+
 ### Testing
 
 - Appointment query optimization test
 - Compound index usage verification
+- Transaction commit test
+- Transaction rollback test
+- Validation test
 
 ### Docker
 
 - MongoDB container
+- MongoDB Replica Set configuration
 - Docker Compose setup for local development
 
 ---
@@ -186,7 +201,7 @@ totalKeysExamined: 0
 executionTimeMillis: 45
 ```
 
-This meant MongoDB had to scan the complete appointments collection and then sort the matching results.
+This meant MongoDB had to scan the complete appointments collection and sort the matching results.
 
 ---
 
@@ -260,6 +275,7 @@ executionTimeMillis: 27
 Before
 ─────────────────────────────
 COLLSCAN
+
 10,000 documents examined
 0 index keys examined
 334 results
@@ -272,7 +288,8 @@ COLLSCAN
 
 After
 ─────────────────────────────
-IXSCAN
+IXSCAN → FETCH
+
 334 documents examined
 334 index keys examined
 334 results
@@ -280,7 +297,80 @@ IXSCAN
 
 The query now uses the compound index and examines only the matching documents instead of scanning the entire collection.
 
-The measured execution time also decreased from **45 ms to 27 ms** in the local test environment. Execution time can vary depending on system load and database cache state, so the reduction in documents examined is the primary optimization evidence.
+The measured execution time decreased from **45 ms to 27 ms** in the local test environment. Execution time can vary depending on system load and database cache state, so the reduction in documents examined is the primary optimization evidence.
+
+---
+
+## Transactional Service Workflow
+
+The appointment booking workflow uses a MongoDB transaction to keep related database operations atomic.
+
+### Workflow
+
+When an appointment is booked, the service performs the following operations inside the same transaction:
+
+```text
+Start Transaction
+      │
+      ▼
+Validate Appointment Date
+      │
+      ▼
+Verify Provider
+      │
+      ▼
+Create Appointment
+      │
+      ▼
+Create Appointment Audit
+      │
+   ┌──┴──────┐
+   │         │
+Success    Failure
+   │         │
+   ▼         ▼
+COMMIT    ROLLBACK
+```
+
+The appointment and its audit record are committed together.
+
+If any persistence operation fails, the transaction is rolled back and previously written records are reverted.
+
+### Validation
+
+Appointment validation is performed before starting the transactional workflow.
+
+The service rejects appointments with a date in the past.
+
+### Transaction Guarantees
+
+The workflow ensures:
+
+- Appointment and audit are committed atomically.
+- Persistence failures trigger rollback.
+- Partial writes are not left in the database.
+- Validation happens before transactional database operations.
+
+---
+
+## Transaction Testing
+
+The transactional workflow is covered by automated tests.
+
+The tests verify:
+
+```text
+✓ Appointment and audit are committed together
+✓ Appointment is rolled back when audit persistence fails
+✓ Invalid appointment dates are rejected
+```
+
+Current result:
+
+```text
+Test Files  2 passed (2)
+Tests       4 passed (4)
+```
 
 ---
 
@@ -332,14 +422,20 @@ SANAD/
 │   │   ├── appointments/
 │   │   │   ├── controllers/
 │   │   │   │   └── appointment.controller.ts
+│   │   │   │
 │   │   │   ├── models/
-│   │   │   │   └── appointment.model.ts
+│   │   │   │   ├── appointment.model.ts
+│   │   │   │   └── appointment-audit.model.ts
+│   │   │   │
 │   │   │   ├── repositories/
 │   │   │   │   └── appointment.repository.ts
+│   │   │   │
 │   │   │   ├── routes/
 │   │   │   │   └── appointment.routes.ts
+│   │   │   │
 │   │   │   └── services/
-│   │   │       └── appointment.service.ts
+│   │   │       ├── appointment.service.ts
+│   │   │       └── appointment-booking.service.ts
 │   │   │
 │   │   └── providers/
 │   │       └── models/
@@ -354,7 +450,8 @@ SANAD/
 │   └── server.ts
 │
 ├── tests/
-│   └── appointment.query.test.ts
+│   ├── appointment.query.test.ts
+│   └── appointment.transaction.test.ts
 │
 ├── .env
 ├── .env.example
@@ -375,8 +472,10 @@ Create a `.env` file in the project root:
 
 ```env
 PORT=3000
-MONGODB_URI=mongodb://localhost:27017/sanad
+MONGODB_URI=mongodb://localhost:27017/sanad?replicaSet=rs0&directConnection=true
 ```
+
+> The MongoDB Replica Set is required for transaction support in the local development environment.
 
 > `.env` is excluded from Git. Use `.env.example` as a reference.
 
@@ -398,25 +497,47 @@ Using Docker Compose:
 docker compose up -d
 ```
 
-### 3. Seed Sample Data
+### 3. Initialize the Replica Set
+
+After MongoDB starts for the first time:
+
+```bash
+docker exec sanad-mongodb mongosh --eval "rs.initiate()"
+```
+
+If the Replica Set is already initialized, this step can be skipped.
+
+Check the Replica Set state:
+
+```bash
+docker exec sanad-mongodb mongosh --quiet --eval "rs.status().members.map(m => ({name:m.name,stateStr:m.stateStr}))"
+```
+
+The node should report:
+
+```text
+PRIMARY
+```
+
+### 4. Seed Sample Data
 
 ```bash
 npm run seed
 ```
 
-### 4. Create the Appointment Index
+### 5. Create the Appointment Index
 
 ```bash
 npm run indexes
 ```
 
-### 5. Analyze the Query
+### 6. Analyze the Query
 
 ```bash
 npm run explain
 ```
 
-### 6. Start the API
+### 7. Start the API
 
 Development mode:
 
@@ -454,15 +575,15 @@ docker compose down
 
 ### Docker Service
 
-| Service   |    Port | Description      |
-| --------- | ------: | ---------------- |
-| `mongodb` | `27017` | MongoDB database |
+| Service   |    Port | Description         |
+| --------- | ------: | ------------------- |
+| `mongodb` | `27017` | MongoDB Replica Set |
 
 ---
 
 ## Testing
 
-Run the test suite:
+Run the complete test suite:
 
 ```bash
 npm test
@@ -474,12 +595,15 @@ Current test coverage includes:
 - Compound index usage
 - Query plan verification
 - Reduced documents examined
+- Transaction commit
+- Transaction rollback
+- Appointment validation
 
 Current result:
 
 ```text
-Test Files  1 passed (1)
-Tests       1 passed (1)
+Test Files  2 passed (2)
+Tests       4 passed (4)
 ```
 
 ---
@@ -524,6 +648,7 @@ The project follows several backend development principles:
 - Service / Repository pattern
 - Database query optimization
 - Proper MongoDB indexing
+- Atomic transactional workflows
 - Evidence-based performance analysis
 - Automated testing
 - Environment-based configuration
@@ -542,8 +667,12 @@ Current implementation includes:
 - Appointment module
 - Provider model
 - Appointment repository and service
+- Appointment booking transaction
+- Appointment audit records
 - Compound database index
 - Query optimization
 - MongoDB `EXPLAIN` analysis
-- Automated test
+- Transaction commit and rollback handling
+- Automated tests
 - Docker support
+- MongoDB Replica Set configuration
