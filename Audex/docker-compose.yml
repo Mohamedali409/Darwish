@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audex-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      MONGODB_URI: mongodb://mongodb:27017/audex
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - mongodb
+      - redis
+
+  mongodb:
+    image: mongo:7
+    container_name: audex-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: audex-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  mongodb_data:
